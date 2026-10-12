@@ -1,0 +1,5 @@
+# Windows needs CRLF line endings in these, even when edited on a Mac
+*.ps1  text eol=crlf
+*.psd1 text eol=crlf
+*.bat  text eol=crlf
+*.txt  text eol=crlf

@@ -1,0 +1,11 @@
+# Mac junk
+.DS_Store
+._*
+
+# School-specific files: stay on your machine / USB, never in git
+src/site-config.psd1
+src/wallpaper.png
+src/Student_Laptop_Icons_Pack 2/school-home.ico
+
+# Old copies (git history replaces these)
+prev-versions/
