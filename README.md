@@ -43,7 +43,7 @@ Restart the laptop when the script finishes. Logs are saved to `C:\ProgramData\S
 
 ```
 src/
-  BWRM-v2.ps1                   Main script
+  BWRM.ps1                      Main script
   2-RUN-SETUP.bat               One-click launcher
   site-config.example.psd1      Template for organization-specific settings
   Student_Laptop_Icons_Pack 2/  Shortcut icons
