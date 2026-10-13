@@ -141,6 +141,12 @@ $Shortcuts = [ordered]@{
 #Log location
 [string]$LogFolder = "C:\ProgramData\StudentLaptopSetup"
 
+# --- McAfee cleanup tool (MCPR) ---
+# McAfee often refuses a normal silent uninstall. If it's still installed
+# after Section 5, the script runs McAfee's own removal engine from this
+# folder (next to the script). See tools\MCPR\HOW-TO-GET-MCPR.txt.
+[string]$McprFolder = Join-Path $ConfigFolder "tools\MCPR"
+
 #School wallpaper
 [string]$WallpaperFileName = "wallpaper.png"
 
@@ -452,11 +458,150 @@ foreach ($Program in $ProgramsToRemove) {
         # from a script; flag it so you remove it by hand.
         Write-Step "  MANUAL: '$Name' has no silent uninstaller. Remove it in Settings > Apps." "Red"
     }
+
+    # VERIFY: an uninstaller can "finish" without removing anything (McAfee
+    # does this). winget and msiexec are native programs, so a failure
+    # never reaches Invoke-Change's catch. Re-check the registry instead.
+    if ($Apply) {
+        $StillThere = Get-ItemProperty -Path $UninstallKeys -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq $Name }
+        if ($StillThere) {
+            Write-Step "            STILL INSTALLED: '$Name'" "Red"
+        }
+        else {
+            Write-Step "            Confirmed removed: '$Name'" "Green"
+        }
+    }
 }
 # NOTE: the code inside { } can use $Name and $SilentCommand because
 # Invoke-Change runs it IMMEDIATELY, while the loop is still on this
 # program. The block reads whatever the variables hold at that moment.
 
+
+# =====================================================================
+# SECTION 5B: McAFEE DEEP CLEAN
+# Runs only if McAfee survived Section 5. Uses McAfee's own removal
+# engine (mccleanup.exe from MCPR) silently, then removes leftovers:
+#   - "ghost" Programs-and-Features entries whose uninstaller is gone
+#     (each one is backed up to a .reg file first)
+#   - leftover McAfee folders, but only once no McAfee service remains
+# =====================================================================
+Write-Step "`n[McAfee cleanup]" "Cyan"
+
+# Returns the uninstaller's .exe path from an UninstallString, or "".
+# Strings look like:  "C:\Path\uninst.exe" /args   or   C:\Path\uninst.exe /args
+function Get-UninstallerPath {
+    param(
+        [string]$UninstallString
+    )
+    if ($UninstallString -match '^\s*"([^"]+)"') {
+        return $Matches[1]
+    }
+    if ($UninstallString -match '^\s*(.+?\.exe)') {
+        return $Matches[1]
+    }
+    return ""
+}
+
+# $true if McAfee still shows in Programs and Features OR its folder exists.
+function Test-McAfeePresent {
+    $Entries = Get-ItemProperty -Path $UninstallKeys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like "McAfee*" }
+    [bool]$HasFolder = Test-Path "C:\Program Files\McAfee"
+    return ([bool]$Entries -or $HasFolder)
+}
+
+[string]$McCleanupExe = Join-Path $McprFolder "mccleanup.exe"
+
+# The component list McAfee's removal wizard passes to mccleanup.exe.
+# -v = verbose, -s = silent (no window, no prompts).
+[string]$McprArguments = "-p StopServices,MFSY,PEF,MXD,CSP,Sustainability,MOCP,MFP,APPSTATS,Auth,EMproxy,FWdiver,HW,MAS,MAT,MBK,MCPR,McProxy,McSvcHost,VUL,MHN,MNA,MOBK,MPFP,MPFPCU,MPS,SHRED,MPSCU,MQC,MQCCU,MSAD,MSHR,MSK,MSKCU,MWL,NMC,RedirSvc,VS,REMEDIATION,MSC,YAP,TRUEKEY,LAM,PCB,Symlink,SafeConnect,MGS,WMIRemover,RESIDUE -v -s"
+
+if (-not (Test-McAfeePresent)) {
+    Write-Step "  McAfee not found. Nothing to clean." "DarkGray"
+}
+elseif (-not (Test-Path $McCleanupExe)) {
+    Write-Step "  McAfee is still installed and $McCleanupExe was not found." "Red"
+    Write-Step "  Add the MCPR files (see tools\MCPR\HOW-TO-GET-MCPR.txt), or remove McAfee manually." "Red"
+}
+else {
+    # 1. McAfee's own removal engine. -Wait: it takes several minutes.
+    #    -PassThru returns the process so we can read its exit code.
+    Invoke-Change "Run McAfee's removal tool silently (takes several minutes)" {
+        $McprProcess = Start-Process -FilePath $McCleanupExe -ArgumentList $McprArguments `
+            -WorkingDirectory $McprFolder -Wait -PassThru -WindowStyle Hidden
+        Write-Step "            mccleanup.exe exit code: $($McprProcess.ExitCode)" "DarkGray"
+    }
+
+    # 2. Ghost entries: listed in Programs and Features, but the uninstaller
+    #    file no longer exists, so the program is really gone. If the
+    #    uninstaller DOES still exist, McAfee is really still installed,
+    #    so we leave that entry alone (deleting it would only hide McAfee).
+    Invoke-Change "Remove leftover McAfee entries (backed up first)" {
+        $McAfeeEntries = Get-ItemProperty -Path $UninstallKeys -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like "McAfee*" }
+
+        foreach ($Entry in $McAfeeEntries) {
+            [string]$UninstallerPath = Get-UninstallerPath -UninstallString $Entry.UninstallString
+
+            # No full path (e.g. "MsiExec.exe /X{...}") means we can't tell
+            # whether it's really gone, so play it safe and leave it.
+            if (-not $UninstallerPath -or -not [System.IO.Path]::IsPathRooted($UninstallerPath)) {
+                Write-Step "            Can't verify, leaving it: $($Entry.DisplayName)" "Yellow"
+                continue
+            }
+
+            if (Test-Path -LiteralPath $UninstallerPath) {
+                Write-Step "            Still installed (uninstaller exists): $($Entry.DisplayName)" "Red"
+                continue
+            }
+
+            # Convert-Path turns PowerShell's registry path into the
+            # HKEY_LOCAL_MACHINE\... form that reg.exe understands.
+            [string]$RegPath = Convert-Path -LiteralPath $Entry.PSPath
+            [string]$SafeName = $Entry.PSChildName -replace '[^\w\-]', '_'
+            [string]$BackupFile = Join-Path $LogFolder "McAfee-backup-$SafeName.reg"
+
+            reg export $RegPath $BackupFile /y | Out-Null
+            Remove-Item -LiteralPath $Entry.PSPath -Recurse -Force
+            Write-Step "            Removed ghost entry: $($Entry.DisplayName) (backup: $BackupFile)" "DarkGray"
+        }
+    }
+
+    # 3. Leftover folders, only if no McAfee service is still running.
+    #    Deleting files out from under a running service fails anyway.
+    Invoke-Change "Delete leftover McAfee folders" {
+        $McAfeeServices = Get-Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like "*McAfee*" }
+
+        if ($McAfeeServices) {
+            Write-Step "            McAfee services still present; folders kept until after a restart." "Yellow"
+        }
+        else {
+            [string[]]$McAfeeFolders = @(
+                "C:\Program Files\McAfee",
+                "C:\Program Files\Common Files\McAfee",
+                "C:\ProgramData\McAfee"
+            )
+            foreach ($Folder in $McAfeeFolders) {
+                if (Test-Path -LiteralPath $Folder) {
+                    Remove-Item -LiteralPath $Folder -Recurse -Force -ErrorAction SilentlyContinue
+                    Write-Step "            Deleted folder: $Folder" "DarkGray"
+                }
+            }
+        }
+    }
+
+    # 4. Final answer.
+    if ($Apply) {
+        if (Test-McAfeePresent) {
+            Write-Step "  McAfee not fully gone yet. RESTART, then run setup again to finish." "Yellow"
+        }
+        else {
+            Write-Step "  McAfee fully removed." "Green"
+        }
+    }
+}
 
 # =====================================================================
 # SECTION 6: REMOVE STORE (AppX) APPS, INCLUDING COPILOT

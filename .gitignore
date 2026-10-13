@@ -9,3 +9,7 @@ src/Student_Laptop_Icons_Pack 2/school-home.ico
 
 # Old copies (git history replaces these)
 prev-versions/
+
+# McAfee's removal tool files (their software, not ours). Keep only the how-to.
+src/tools/MCPR/*
+!src/tools/MCPR/HOW-TO-GET-MCPR.txt

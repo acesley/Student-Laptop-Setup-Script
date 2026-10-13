@@ -1,0 +1,25 @@
+HOW TO GET THE McAFEE REMOVAL FILES (one-time setup)
+=====================================================
+
+The script removes stubborn McAfee installs by running McAfee's own
+removal engine, mccleanup.exe, silently. It expects these files in
+THIS folder (src/tools/MCPR/). They are McAfee's software, so they are
+NOT included in the repo (.gitignore keeps them out).
+
+IMPORTANT: the newest MCPR no longer supports silent mode. You need an
+older MCPR (around version 10.3.145, from 2021).
+
+Steps (on any Windows PC):
+1. Download the older MCPR.exe.
+2. Right-click MCPR.exe > Properties > Digital Signatures.
+   Make sure it is signed by McAfee. Do not use it if it isn't.
+3. Run MCPR.exe. When the "McAfee Software Removal" window appears,
+   DON'T click through it.
+4. Press Win+R, type  %LocalAppData%\Temp\MCPR  and press Enter.
+5. Copy EVERYTHING in that folder into this folder (src/tools/MCPR/),
+   so that mccleanup.exe sits right next to this file.
+6. Go back to the MCPR window and click Cancel.
+
+Check: this folder should now contain mccleanup.exe.
+The script will use it automatically when McAfee survives a normal
+uninstall. Run 1-Preview.bat to confirm nothing errors.
