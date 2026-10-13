@@ -55,6 +55,11 @@ $Shortcuts = [ordered]@{
     "PowerPoint" = @{ Url = "https://powerpoint.cloud.microsoft/";         Icon = "microsoft-powerpoint.ico" }
 }
 
+# Shortcuts named here stay loose on the desktop. Every other shortcut
+# above goes into a desktop folder with this name.
+[string[]]$ShortcutsOnDesktop = @("School Home")
+[string]$ShortcutFolderName = "School"
+
 # Folder (next to this script) that holds the .ico files above.
 [string]$IconSourceFolderName = "Student_Laptop_Icons_Pack 2"
 # The script copies the icons here so they keep working after the USB
@@ -835,6 +840,12 @@ else {
         # 0 = "Picture" in Settings (not Solid color, Slideshow, or Spotlight).
         Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers" -Name "BackgroundType" -Value 0
 
+        # Turn off Windows Spotlight on the desktop. When it's on, Windows
+        # swaps in its own daily photo at sign-in and overwrites ours
+        # (that's the "Learn about this picture" icon on the desktop).
+        # This policy value works on Windows 11 Home too.
+        Set-RegistryValue -Path "HKCU:\Software\Policies\Microsoft\Windows\CloudContent" -Name "DisableSpotlightCollectionOnDesktop" -Value 1
+
         # Writes the Wallpaper registry value AND refreshes the desktop.
         Set-DesktopWallpaper -ImagePath $WallpaperTarget
     }
@@ -852,6 +863,8 @@ else {
         reg add "HKU\DefaultProfile\Control Panel\Desktop" /v "Wallpaper" /t REG_SZ /d "$WallpaperTarget" /f | Out-Null
         reg add "HKU\DefaultProfile\Control Panel\Desktop" /v "WallpaperStyle" /t REG_SZ /d "$WallpaperStyle" /f | Out-Null
         reg add "HKU\DefaultProfile\Control Panel\Desktop" /v "TileWallpaper" /t REG_SZ /d "0" /f | Out-Null
+        reg add "HKU\DefaultProfile\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers" /v "BackgroundType" /t REG_DWORD /d 0 /f | Out-Null
+        reg add "HKU\DefaultProfile\Software\Policies\Microsoft\Windows\CloudContent" /v "DisableSpotlightCollectionOnDesktop" /t REG_DWORD /d 1 /f | Out-Null
         [GC]::Collect()   # release PowerShell's handle on the file before unloading
         reg unload "HKU\DefaultProfile" | Out-Null
     }
@@ -888,12 +901,39 @@ else {
     Write-Step "  NOTE: icon folder '$IconSourceFolderName' not found next to the script. Shortcuts will use the default browser icon." "Red"
 }
 
+# The "School" folder on the shared desktop, for every account.
+[string]$ShortcutFolder = Join-Path $PublicDesktop $ShortcutFolderName
+Invoke-Change "Create desktop folder '$ShortcutFolderName'" {
+    if (-not (Test-Path -LiteralPath $ShortcutFolder)) {
+        New-Item -Path $ShortcutFolder -ItemType Directory -Force | Out-Null
+    }
+}
+
 # .Keys gives the shortcut names; $Shortcuts[$Name] gives that shortcut's
 # hashtable, and .Url / .Icon read its two values.
 foreach ($ShortcutName in $Shortcuts.Keys) {
     [string]$Url = $Shortcuts[$ShortcutName].Url
     [string]$IconName = $Shortcuts[$ShortcutName].Icon
-    [string]$FilePath = Join-Path $PublicDesktop "$ShortcutName.url"
+
+    # Loose on the desktop, or inside the School folder?
+    [bool]$StaysOnDesktop = $ShortcutsOnDesktop -contains $ShortcutName
+    if ($StaysOnDesktop) {
+        [string]$FilePath = Join-Path $PublicDesktop "$ShortcutName.url"
+        [string]$WhereNote = "on the desktop"
+    }
+    else {
+        [string]$FilePath = Join-Path $ShortcutFolder "$ShortcutName.url"
+        [string]$WhereNote = "in the $ShortcutFolderName folder"
+
+        # Earlier versions put every shortcut loose on the desktop. Remove
+        # that old copy so it doesn't show up twice.
+        [string]$OldDesktopCopy = Join-Path $PublicDesktop "$ShortcutName.url"
+        if (Test-Path -LiteralPath $OldDesktopCopy) {
+            Invoke-Change "Remove old desktop copy of '$ShortcutName'" {
+                Remove-Item -LiteralPath $OldDesktopCopy -Force
+            }
+        }
+    }
 
     # A .url file is a small text file in INI format. URL= is the site.
     # IconFile= and IconIndex= are optional and set the picture shown.
@@ -911,7 +951,7 @@ foreach ($ShortcutName in $Shortcuts.Keys) {
         [string]$IconNote = "no icon found, default icon"
     }
 
-    Invoke-Change "Create desktop shortcut '$ShortcutName' -> $Url ($IconNote)" {
+    Invoke-Change "Create shortcut '$ShortcutName' $WhereNote -> $Url ($IconNote)" {
         Set-Content -Path $FilePath -Value $FileContent -Encoding ASCII
     }
 }
